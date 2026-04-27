@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>scout_perception</name>
+  <version>0.1.0</version>
+  <description>
+    YOLOv8 person detection node for the SCOUT search-and-rescue robot.
+    Subscribes to an Intel RealSense RGB-D stream, runs ONNX Runtime inference,
+    computes 3D positions from depth, and publishes annotated images.
+  </description>
+  <maintainer email="khit@lumenrobotics.com">Khit Nay</maintainer>
+  <license>MIT</license>
+
+  <!-- Build tool -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Core ROS2 C++ client library -->
+  <depend>rclcpp</depend>
+
+  <!-- Standard ROS2 message types -->
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+
+  <!-- Image pipeline utilities -->
+  <depend>cv_bridge</depend>           <!-- ROS Image ↔ cv::Mat conversion -->
+  <depend>image_transport</depend>     <!-- Compressed/raw topic abstraction -->
+  <depend>message_filters</depend>     <!-- Time-synchronised multi-topic callbacks -->
+
+  <!-- OpenCV (system) -->
+  <depend>opencv2</depend>
+
+  <!-- Realsense -->
+  <depend>realsense2_camera_msgs</depend>
+
+  <!-- Test dependencies -->
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -1,0 +1,21 @@
+# ROS2 colcon
+build/
+install/
+log/
+
+# Model weights (large binaries)
+*.pt
+*.onnx
+*.pth
+*.weights
+
+# Python
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
