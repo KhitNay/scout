@@ -1,13 +1,26 @@
 #include <rclcpp/rclcpp.hpp>
 #include <realsense2_camera_msgs/msg/rgbd.hpp>
-#include <cv_bridge/cv_bridge.hpp>
-
+#include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
 #include <opencv2/dnn.hpp>
-#include <onnxruntime_cxx_api.h>
+
+#include <NvInfer.h>
+#include <cuda_runtime_api.h>
+#include <fstream>
 
 #include <memory>
 
+class TRTLogger : public nvinfer1::ILogger
+{
+    public:
+        void log(Severity severity, const char* msg) noexcept override
+        {
+            if (severity <= Severity::kWARNING)
+            {
+               std::cout << "[TRT] " << msg << std::endl;
+            }
+        }
+};
 struct Detection
 {
     cv::Rect2f box;
@@ -18,7 +31,8 @@ class DetectionNode : public rclcpp::Node
 {
     public:
         DetectionNode()
-            : Node("scout_detection")
+            : Node("scout_detection"), mRuntime(nullptr), mCudaEngine(nullptr), mExecContext(nullptr),
+                mGpuInput(nullptr), mGpuOutput(nullptr)
         {
             // Set up ROS interfaces
             mRGBDSub = create_subscription<realsense2_camera_msgs::msg::RGBD>("/camera/camera/rgbd", 10,
@@ -27,10 +41,28 @@ class DetectionNode : public rclcpp::Node
                             std::bind(&DetectionNode::cameraInfoCallback, this, std::placeholders::_1));
             mImagePub = create_publisher<sensor_msgs::msg::Image>("/scout/detection_image", 10);
 
-            // ONNX Runtime setup
-            initOnnxRuntime();
+            // TensorRT setup
+            try
+            {
+                initTensorRT();
+            }
+            catch (const std::exception& e)
+            {
+                RCLCPP_FATAL(get_logger(), "TensorRT init failed: %s", e.what());
+                throw;
+            }
 
             RCLCPP_INFO(get_logger(), "Scout Detection Node Started");
+        }
+
+        ~DetectionNode()
+        {
+            cudaStreamDestroy(mCudaStream);
+            cudaFree(mGpuInput);
+            cudaFree(mGpuOutput);
+            delete mExecContext;
+            delete mCudaEngine;
+            delete mRuntime;
         }
 
     private:
@@ -51,39 +83,9 @@ class DetectionNode : public rclcpp::Node
             }
 
             std::vector<float> inputData = preprocess(bgrFrame);
-            std::array<int64_t, 4> inputShape = {1, 3, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE};
+            runInference(inputData);
+            const float* rawOutput = mOutputHost.data();
 
-            Ort::MemoryInfo memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-            Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
-                memoryInfo,
-                inputData.data(),
-                inputData.size(),
-                inputShape.data(),
-                inputShape.size()
-            );
-
-            const char* inputNames[]  = {"images"};
-            const char* outputNames[] = {"output0"};
-
-            std::vector<Ort::Value> outputTensors;
-            try
-            {
-                outputTensors = mOrtSession->Run(
-                    Ort::RunOptions{nullptr},
-                    inputNames,
-                    &inputTensor,
-                    1,
-                    outputNames,
-                    1
-                );
-            }
-            catch (const Ort::Exception& e)
-            {
-                RCLCPP_ERROR(get_logger(), "Ort exception: %s", e.what());
-                return;
-            }
-
-            const float* rawOutput = outputTensors[0].GetTensorData<float>();
             std::vector<Detection> detections = postprocess(rawOutput, bgrFrame.cols, bgrFrame.rows);
             cv::Mat annotatedFrame = bgrFrame.clone();
 
@@ -145,19 +147,54 @@ class DetectionNode : public rclcpp::Node
             return false;
         }
 
-        void initOnnxRuntime()
+        std::vector<char> readEngineFile(const std::string& filePath)
         {
-            // Create an environment and session
-            mOrtEnv = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "scout_ort_env");
+            std::ifstream file(filePath, std::ios::binary | std::ios::ate);
+            if (!file.is_open())
+            {
+                throw std::runtime_error("Failed to open engine file: " + filePath);
+            }
+            size_t fileSize = file.tellg();
+            file.seekg(0, std::ios::beg);
+            std::vector<char> buffer(fileSize);
+            file.read(buffer.data(), fileSize);
+            return buffer;
+        }
 
-            Ort::SessionOptions sessionOptions;
-            sessionOptions.SetInterOpNumThreads(1);
-            sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
+        void initTensorRT()
+        {
+            // Read engine and deserialize
+            std::vector<char> engineData = readEngineFile("/home/khit/scout/models/yolov8n.engine");
+            mRuntime = nvinfer1::createInferRuntime(mTRTLogger);
+            mCudaEngine = mRuntime->deserializeCudaEngine(engineData.data(), engineData.size());
+            mExecContext = mCudaEngine->createExecutionContext();
+            cudaStreamCreate(&mCudaStream);
 
-            const char* modelPath = "/home/khit/scout_ws/src/yolov8n.onnx";
-            mOrtSession = std::make_unique<Ort::Session>(*mOrtEnv, modelPath, sessionOptions);
+            // Allocate GPU memory inputs and outputs
+            size_t inputSize = 1 * 3 * MODEL_INPUT_SIZE * MODEL_INPUT_SIZE * sizeof(float);
+            size_t outputSize = 1 * 84 * N_YOLO_CANDIDATES * sizeof(float);
+            cudaMalloc(&mGpuInput, inputSize);
+            cudaMalloc(&mGpuOutput, outputSize);
 
-            RCLCPP_INFO(get_logger(), "ONNX Model loaded successfully");
+            // Bind tensor names to buffers
+            mExecContext->setTensorAddress("images", mGpuInput);
+            mExecContext->setTensorAddress("output0", mGpuOutput);
+
+            // Size CPU output buffer to receive results
+            mOutputHost.resize(84 * N_YOLO_CANDIDATES);
+
+            RCLCPP_INFO(get_logger(), "TensorRT engine loaded successfully");
+        }
+
+        void runInference(const std::vector<float>& inputData)
+        {
+            // Copy data from CPU to GPU before running inference
+            cudaMemcpyAsync(mGpuInput, inputData.data(), inputData.size() * sizeof(float), cudaMemcpyHostToDevice, mCudaStream);
+            mExecContext->enqueueV3(mCudaStream);
+
+            // Copy output from GPU to CPU and synchronize
+            cudaMemcpyAsync(mOutputHost.data(), mGpuOutput, mOutputHost.size() * sizeof(float), cudaMemcpyDeviceToHost, mCudaStream);
+            cudaStreamSynchronize(mCudaStream);
         }
 
         std::vector<float> preprocess(const cv::Mat& bgrImage)
@@ -264,8 +301,14 @@ class DetectionNode : public rclcpp::Node
         rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr mCameraInfoSub;
         rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr mImagePub;
 
-        std::unique_ptr<Ort::Env> mOrtEnv;
-        std::unique_ptr<Ort::Session> mOrtSession;
+        TRTLogger mTRTLogger;
+        nvinfer1::IRuntime* mRuntime;
+        nvinfer1::ICudaEngine* mCudaEngine;
+        nvinfer1::IExecutionContext* mExecContext;
+        void* mGpuInput;
+        void* mGpuOutput;
+        std::vector<float> mOutputHost;
+        cudaStream_t mCudaStream;
 
         static constexpr int   MODEL_INPUT_SIZE  = 640;
         static constexpr int   N_YOLO_CANDIDATES = 8400;

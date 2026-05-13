@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.10)
 project(scout_perception)
 
 # Use C++17 — required for structured bindings and std::filesystem
@@ -17,10 +17,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(geometry_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
-find_package(image_transport REQUIRED)
-find_package(message_filters REQUIRED)
 find_package(realsense2_camera_msgs REQUIRED)
 
 # ---------------------------------------------------------------------------
@@ -29,27 +26,20 @@ find_package(realsense2_camera_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
 
 # ---------------------------------------------------------------------------
-# ONNX Runtime — installed manually to /usr/local
-# We point CMake at the headers and library directly because there is no
-# official FindOnnxRuntime.cmake provided by Microsoft for system installs.
+# CUDA
 # ---------------------------------------------------------------------------
-set(ONNXRUNTIME_INCLUDE_DIR /usr/local/include)
-set(ONNXRUNTIME_LIB         /usr/local/lib/libonnxruntime.so)
+find_package(CUDA REQUIRED)
 
-# Fail early with a helpful message if ONNX Runtime is not installed.
-if(NOT EXISTS "${ONNXRUNTIME_LIB}")
-  message(FATAL_ERROR
-    "ONNX Runtime not found.\n"
-    "  Expected library : ${ONNXRUNTIME_LIB}\n"
-    "  See CLAUDE.md for install instructions.")
+# ---------------------------------------------------------------------------
+# TensorRT — JetPack installs headers to /usr/include/aarch64-linux-gnu
+# and libraries to /usr/lib/aarch64-linux-gnu
+# ---------------------------------------------------------------------------
+set(TENSORRT_INCLUDE_DIR /usr/include/aarch64-linux-gnu)
+set(TENSORRT_LIB_DIR     /usr/lib/aarch64-linux-gnu)
+
+if(NOT EXISTS "${TENSORRT_LIB_DIR}/libnvinfer.so")
+  message(FATAL_ERROR "TensorRT not found. Expected: ${TENSORRT_LIB_DIR}/libnvinfer.so")
 endif()
-
-# Wrap it in an IMPORTED target so we can link cleanly
-add_library(onnxruntime SHARED IMPORTED)
-set_target_properties(onnxruntime PROPERTIES
-  IMPORTED_LOCATION "${ONNXRUNTIME_LIB}"
-  INTERFACE_INCLUDE_DIRECTORIES "${ONNXRUNTIME_INCLUDE_DIR}"
-)
 
 # ---------------------------------------------------------------------------
 # detection_node executable
@@ -58,7 +48,8 @@ add_executable(detection_node src/detection_node.cpp)
 
 # Include ONNX Runtime headers
 target_include_directories(detection_node PRIVATE
-  ${ONNXRUNTIME_INCLUDE_DIR}
+  ${TENSORRT_INCLUDE_DIR}
+  ${CUDA_INCLUDE_DIRS}
   include
 )
 
@@ -66,16 +57,15 @@ target_include_directories(detection_node PRIVATE
 ament_target_dependencies(detection_node
   rclcpp
   sensor_msgs
-  geometry_msgs
   cv_bridge
-  image_transport
-  message_filters
   realsense2_camera_msgs
 )
 
 target_link_libraries(detection_node
   ${OpenCV_LIBS}
-  onnxruntime
+  ${CUDA_LIBRARIES}
+  ${TENSORRT_LIB_DIR}/libnvinfer.so
+  ${TENSORRT_LIB_DIR}/libnvinfer_plugin.so
 )
 
 # ---------------------------------------------------------------------------
@@ -83,10 +73,6 @@ target_link_libraries(detection_node
 # ---------------------------------------------------------------------------
 install(TARGETS detection_node
   DESTINATION lib/${PROJECT_NAME}
-)
-
-install(DIRECTORY launch
-  DESTINATION share/${PROJECT_NAME}
 )
 
 # ---------------------------------------------------------------------------
