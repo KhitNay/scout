@@ -41,10 +41,13 @@ class DetectionNode : public rclcpp::Node
                             std::bind(&DetectionNode::cameraInfoCallback, this, std::placeholders::_1));
             mImagePub = create_publisher<sensor_msgs::msg::Image>("/scout/detection_image", 10);
 
+            this->declare_parameter<std::string>("engine_path", "/scout/models/yolov8n.engine");
+            std::string enginePath = this->get_parameter("engine_path").as_string();
+
             // TensorRT setup
             try
             {
-                initTensorRT();
+                initTensorRT(enginePath);
             }
             catch (const std::exception& e)
             {
@@ -161,10 +164,10 @@ class DetectionNode : public rclcpp::Node
             return buffer;
         }
 
-        void initTensorRT()
+        void initTensorRT(const std::string& enginePath)
         {
             // Read engine and deserialize
-            std::vector<char> engineData = readEngineFile("/home/khit/scout/models/yolov8n.engine");
+            std::vector<char> engineData = readEngineFile(enginePath);
             mRuntime = nvinfer1::createInferRuntime(mTRTLogger);
             mCudaEngine = mRuntime->deserializeCudaEngine(engineData.data(), engineData.size());
             mExecContext = mCudaEngine->createExecutionContext();
