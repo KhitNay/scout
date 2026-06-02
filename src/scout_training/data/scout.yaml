@@ -1,0 +1,7 @@
+path: /home/khit/scout_ws/src/scout_training/data
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 1
+names: ['person']
