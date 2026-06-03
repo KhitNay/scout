@@ -1,8 +1,14 @@
 # Fine-tunes YOLOv8n on SCOUT dataset with MLflow experiment tracking
 
+import os
+
+TRACKING_URI = "sqlite:////home/khit/scout_ws/mlflow.db"
+os.environ["MLFLOW_TRACKING_URI"] = TRACKING_URI
+
 from ultralytics import YOLO
 import mlflow
 import subprocess
+import datetime
 
 MODEL_PATH = r"/home/khit/scout_ws/src/scout_training/models/yolov8n.pt"
 DATA_CONFIG = r"/home/khit/scout_ws/src/scout_training/data/scout.yaml"
@@ -13,27 +19,8 @@ LEARNING_RATE = 1e-3
 FREEZE = 10
 DEVICE = 0  # RTX 4060
 
-# Define Ultralytics callbacks for MLflow logging. 
-def on_train_start(trainer):
-
-    # Get git hash for DVC
-    git_hash = subprocess.check_output(
-        ["git", "rev-parse", "--short", "HEAD"]
-    ).decode().strip()
-
-    mlflow.set_experiment("scout-transfer-learning")
-    mlflow.start_run(run_name=f"yolov8n_freeze{FREEZE}_lr{LEARNING_RATE}")
-
-    # Most hyperparameters are under trainer.args
-    mlflow.log_params({
-        "model": "yolov8n",
-        "epochs": trainer.args.epochs,
-        "batch_size": trainer.args.batch,
-        "lr0": trainer.args.lr0,
-        "freeze": trainer.args.freeze,
-        "imgsz": trainer.args.imgsz,
-        "dataset_git_hash": git_hash
-    })
+mlflow.set_tracking_uri(TRACKING_URI)
+mlflow.set_experiment("scout-transfer-learning")
 
 def on_epoch_end(trainer):
     metrics = trainer.metrics
@@ -51,26 +38,30 @@ def on_epoch_end(trainer):
     }, step=trainer.epoch)
 
 def on_train_end(trainer):
-
     # trainer.best is auto updated
     mlflow.log_artifact(str(trainer.best))
-    mlflow.end_run()
 
 # Load model and attach callbacks
 model = YOLO(MODEL_PATH)
-model.add_callback("on_train_start", on_train_start)
 model.add_callback("on_fit_epoch_end", on_epoch_end)
 model.add_callback("on_train_end", on_train_end)
 
+git_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode().strip()
+timestamp = datetime.datetime.now().strftime("%m%d_%H%M")
+
 # Train
-model.train(
-    data=DATA_CONFIG,
-    epochs=EPOCHS,
-    imgsz=IMAGE_SIZE,
-    batch=BATCH_SIZE,
-    lr0=LEARNING_RATE,
-    freeze=FREEZE,
-    device=DEVICE,
-    project="/home/khit/scout_ws/src/scout_training/runs",
-    name="finetune_v1",
-)
+with mlflow.start_run(run_name=f"yolov8n_freeze{FREEZE}_lr{LEARNING_RATE}_{timestamp}"):
+    mlflow.log_params({
+        "model": "yolov8n",
+        "epochs": EPOCHS,
+        "batch_size": BATCH_SIZE,
+        "lr0": LEARNING_RATE,
+        "freeze": FREEZE,
+        "imgsz": IMAGE_SIZE,
+        "dataset_git_hash": git_hash,
+    })
+    model.train(
+        data=DATA_CONFIG, epochs=EPOCHS, imgsz=IMAGE_SIZE, batch=BATCH_SIZE,
+        lr0=LEARNING_RATE, freeze=FREEZE, device=DEVICE,
+        project="/home/khit/scout_ws/src/scout_training/runs", name="finetune_v1",
+    )
