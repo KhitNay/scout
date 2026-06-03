@@ -1,0 +1,5 @@
+outs:
+- md5: 97e9ab5a1539e2f7d3590edf88111cad
+  size: 12824003
+  hash: md5
+  path: yolov8n.onnx

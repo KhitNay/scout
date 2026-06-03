@@ -2,4 +2,4 @@ outs:
 - md5: e73ae7725e26b0d0feaf45d7ad93b124
   size: 12265244
   hash: md5
-  path: best.onnx
+  path: scout_v1_best.onnx

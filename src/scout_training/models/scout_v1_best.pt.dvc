@@ -2,4 +2,4 @@ outs:
 - md5: b516ceb841dcabdf0f5794a7f7758e95
   size: 6249642
   hash: md5
-  path: best.pt
+  path: scout_v1_best.pt
