@@ -24,3 +24,8 @@ __pycache__/
 
 .claude/
 CLAUDE.md
+mlflow.db
+src/scout_training/runs/
+src/scout_training/scripts/mlflow.db
+src/scout_training/scripts/mlruns/
+src/scout_training/scripts/runs/
