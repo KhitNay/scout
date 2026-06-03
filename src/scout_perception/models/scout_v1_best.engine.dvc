@@ -1,0 +1,5 @@
+outs:
+- md5: 981e64277819ec58b69393801ae496f6
+  size: 7802815
+  hash: md5
+  path: scout_v1_best.engine
