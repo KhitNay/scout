@@ -41,7 +41,7 @@ class DetectionNode : public rclcpp::Node
                             std::bind(&DetectionNode::cameraInfoCallback, this, std::placeholders::_1));
             mImagePub = create_publisher<sensor_msgs::msg::Image>("/scout/detection_image", 10);
 
-            this->declare_parameter<std::string>("engine_path", "/scout/models/yolov8n.engine");
+            this->declare_parameter<std::string>("engine_path", "/home/khit/scout_ws/src/scout_perception/models/scout_v1_best.engine");
             std::string enginePath = this->get_parameter("engine_path").as_string();
 
             // TensorRT setup
